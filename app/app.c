@@ -133,79 +133,79 @@ void protocol_Fxn(void)
     {
         events = Event_pend(protocol_eventHandle, 0, EVENT_ALL, BIOS_WAIT_FOREVER);
         SetWatchDog();                       //看门狗的喂狗
-        extern_flash_open();                 //如果有外部flash，在这里使能外部flash
-        screen_repeat_display();             //24小时自动刷新屏幕的函数
-        if(clear_event_flag_epd_display == 1)
-        {
-            events &= (~EVENT_FLAG_EPD_DISPLAY);
-            clear_event_flag_epd_display = 0;
-        }
-        if(events & EVENT_FLAG_EPD_DISPLAY)  //屏幕显示任务
-        {
-            screen_display();
-        }
+//        extern_flash_open();                 //如果有外部flash，在这里使能外部flash
+//        screen_repeat_display();             //24小时自动刷新屏幕的函数
+//        if(clear_event_flag_epd_display == 1)
+//        {
+//            events &= (~EVENT_FLAG_EPD_DISPLAY);
+//            clear_event_flag_epd_display = 0;
+//        }
+//        if(events & EVENT_FLAG_EPD_DISPLAY)  //屏幕显示任务
+//        {
+//            screen_display();
+//        }
         if(events & EVENT_FLAG_NFC)
         {
             NFC_ProtoclFnx(&NFCobj);
         }
 
-        if(events & EVENT_FLAG_INTER_REED)
-        {
-            Task_sleep(10000);//100ms
-            if(0 == PIN_getInputValue(Board_BUTTON0))
-            {
-                reed_fun_select(epd_attr_info.magnet);
-            }
-        }
-        if(events & EVENT_FLAG_SYS_HEART)
-        {
-            heartbeat_count ++;
-            if(heartbeat_count > 3)
-            {
-                heartbeat_count =0;
-                Send_table_heartbeat(CTRL_TABLE_HBR,1);
-            }else
-            {
-                Send_heartbeat(CTRL_HBR_NORMAL,1);
-            }
-        }
-        if(events & EVENT_FLAG_RFWORK)
-        {
-            rf_interrupt_into_fun();
-        }
-        if(events & EVENT_FLAG_ERASER_BUFF)
-        {
-            event_128_fun();
-        }
-        if(events & EVENT_FLAG_OSD_ANALUSIS)
-        {
-            main_osd_cmd();
-        }
-
-        if(events & EVENT_FALG_DISPLAY_PAGE)
-        {
-            display_page_analysis_fun();
-        }
-        if(events & EVENT_FLAG_UPDATA_CHECK)
-        {
-            erase_pkg_area_fun();
-        }
-        if(events & EVENT_FLAG_NETLINK)
-        {
-            netlink_info_write_fun();
-        }
-        if(events & EVENT_FLAG_QUEST_HEART)
-        {
-            request_heartbeat_fun();
-        }
-        if(events & EVENT_FLAG_UPDATA_ROM)
-        {
-            write_upgread_flag_fun();
-        }
-        if(events & EVENT_FLAG_TIMER_CALIBRATION)
-        {
-
-        }
+//        if(events & EVENT_FLAG_INTER_REED)
+//        {
+//            Task_sleep(10000);//100ms
+//            if(0 == PIN_getInputValue(Board_BUTTON0))
+//            {
+//                reed_fun_select(epd_attr_info.magnet);
+//            }
+//        }
+//        if(events & EVENT_FLAG_SYS_HEART)
+//        {
+//            heartbeat_count ++;
+//            if(heartbeat_count > 3)
+//            {
+//                heartbeat_count =0;
+//                Send_table_heartbeat(CTRL_TABLE_HBR,1);
+//            }else
+//            {
+//                Send_heartbeat(CTRL_HBR_NORMAL,1);
+//            }
+//        }
+//        if(events & EVENT_FLAG_RFWORK)
+//        {
+//            rf_interrupt_into_fun();
+//        }
+//        if(events & EVENT_FLAG_ERASER_BUFF)
+//        {
+//            event_128_fun();
+//        }
+//        if(events & EVENT_FLAG_OSD_ANALUSIS)
+//        {
+//            main_osd_cmd();
+//        }
+//
+//        if(events & EVENT_FALG_DISPLAY_PAGE)
+//        {
+//            display_page_analysis_fun();
+//        }
+//        if(events & EVENT_FLAG_UPDATA_CHECK)
+//        {
+//            erase_pkg_area_fun();
+//        }
+//        if(events & EVENT_FLAG_NETLINK)
+//        {
+//            netlink_info_write_fun();
+//        }
+//        if(events & EVENT_FLAG_QUEST_HEART)
+//        {
+//            request_heartbeat_fun();
+//        }
+//        if(events & EVENT_FLAG_UPDATA_ROM)
+//        {
+//            write_upgread_flag_fun();
+//        }
+//        if(events & EVENT_FLAG_TIMER_CALIBRATION)
+//        {
+//
+//        }
         f_sync();                             //保存文件系统
         extern_flash_close();                 //如果有外部flash，失能外部flash
     }
@@ -238,13 +238,13 @@ void init_flash_param_fun(void)
 
 void init_mini_file_osd_fun(void)
 {
-    f_init_check(4);
-    f_init();
-    sys_load_page_display_fun();          //当文件系统重建时，保证价签也号全部清空防止出现反成功不切页
-    osd_init();
-    isr_reed_init();
+ //   f_init_check(4);
+ //   f_init();
+//    sys_load_page_display_fun();          //当文件系统重建时，保证价签也号全部清空防止出现反成功不切页
+ //   osd_init();
+ //   isr_reed_init();
     isr_nfc_init();
-    adc_voltage();
+//    adc_voltage();
 }
 
 void init_prama(void)

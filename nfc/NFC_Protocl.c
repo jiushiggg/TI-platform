@@ -12,6 +12,8 @@
 #include <stddef.h>
 #include "../nfc/uplink.h"
 
+typedef uint16_t (*nfcFnx)(stNFCobj *nfc, stESLRecBuf *rbuf);
+
 #define FIFO_LEN    32
 
 //ISO 14443-4
@@ -33,7 +35,13 @@
 #define LC   5
 #define DATA 6
 
-#define TAG_STANDARD    0xA404
+#define CLA_STANDARD            0X00
+#define INS_DETECTION           0xA4
+#define INS_READ                0xB0
+#define INS_WRITE               0xD6
+#define STANDARD_READ           0X00B0
+#define STANDARD_WRITE          0X00D6
+#define STANDARD_SELECT         0X00A4
 
 //Private
 #define PCB_OFFSET                              1
@@ -41,12 +49,14 @@
 #define SESSION_OFFSET                    1
 #define SESSION_LEN                            1
 #define SUB_SESSION_LEN                 2
-#define NFC_HEAD_LEN                      (offsetof(stESLReceive, reqType) - PCB_OFFSET)// (SESSION_LEN + SUB_SESSION_LEN + 1)
+#define NFC_HEAD_LEN                  (offsetof(stESLReceive, reqType) - PCB_OFFSET)// (SESSION_LEN + SUB_SESSION_LEN + 1)
 #define CRC_LEN                                     2
 #define CRC_LOW                 (PCB_LEN + NFC_HEAD_LEN + rbuf->dataRec.len)
 #define CRC_HIGH                (PCB_LEN + NFC_HEAD_LEN + rbuf->dataRec.len+1)
 #define DEC_LEN                                     2
 
+#define NFC_EVENT_PRIVATE_ALL       (NFC_EVENT_LIGHT_LED|NFC_EVENT_BLINDING|NFC_EVENT_UPDATA|NFC_EVENT_WRITE_DATA|NFC_EVENT_READ_ID)
+#define NFC_EVENT_STANDARD_ALL      (NFC_EVENT_STANDARD_READ|NFC_EVENT_STANDARD_WRITE)
 
 #define CNT_IDLE 5
 
@@ -54,29 +64,51 @@
 #define LED_OFF(n)   GPIO_setDio(n)
 
 void NFC_ProtoclFnx(stNFCobj *nfc);
-static void selectProtocl(stNFCobj *nfc, stESLRecBuf *rbuf);
-static void privateProtoclFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
-static void standardProtoclFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
+static void commonFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
+static uint16_t selectProtoclHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
+static uint16_t privateHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
+static uint16_t standardHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
 static void NFC_state(stNFCobj *nfc, stESLRecBuf *rbuf);
+static uint16_t privateRxDataHandle(stNFCobj *nfc, stESLRecBuf *rbuf);
+static void NFC_IdleHandle(stNFCobj *nfc);
 void testState(void);
-
-stNFCobj NFCobj;
-stESLRecBuf fm11nc08_buf;
 
 uint8_t const responseErr[2] = {0x6A, 0x82};
 uint8_t const responseOk[2] = {0x90, 0x00};
 uint8_t const responsePageErr[2] = {0x6a, 0x83};
 //const stRFInfo rfInfo={0x52, 0x56,0x78,0x53, 0x51,0x55,0x56,0x66, 0x00,0x00,0x00,0x00, 0x50,0x51,0x52,0x99, 160,160,160, 1};
+/* Data structure of the capability container file */
+#pragma pack(1)
+typedef struct _CC_file{
+    uint16_t cclen;
+    uint8_t mapping_version;
+    uint16_t mle;
+    uint16_t mlc;
+    uint8_t typeTLV;
+    uint8_t length;
+    uint16_t file_identifier;
+    uint16_t max_NDEF;
+    uint8_t read_security;
+    uint8_t write_security;
+}CC_file;
+#pragma pack()
 
-static emAppFile nfcProtoclFlg = NFC_PRIVATE_PROTOCL ;
-uint8_t fm327_fifo[FIFO_LEN];
+//与nfc通信是大端模式
+const CC_file type_4_tag = {0x0F00, 0x20, 0x3B00, 0x4B00, 0x04, 0x06,0x04E1,0x3200,0,0};
+
+stNFCobj NFCobj;
+stESLRecBuf fm11nc08_buf;
+
+static emAppFile nfcProtoclFlg = NFC_NDEF_FILE;
+//static emAppFile nfcProtoclFlg = NFC_PRIVATE_PROTOCL;
 
 //typedef  uint16_t (*nfcFnx)(stNFCobj *nfc, stESLRecBuf *rbuf);
 //uint16_t rx_dataHandle(stNFCobj *nfc, stESLRecBuf *rbuf);
-//nfcFnx    nfcFxnTable[] = {rx_dataHandle};
+nfcFnx  nfcFxnTable[1];
 
+uint8_t ndefTest[100]={0x00, 0x03, 0xD0,0,0};
 
-void NFC_IdleHandle(stNFCobj *nfc)
+static void NFC_IdleHandle(stNFCobj *nfc)
 {
     uint8_t ret = 0;
     //uint8_t  B=0 ;
@@ -92,10 +124,6 @@ void NFC_IdleHandle(stNFCobj *nfc)
             nfc->curEvent = NFC_EVENT_ACTIVE;
             break;
         }
-        //        if(ret & MAIN_IRQ_RF_PWON){
-        //            nfc->curEvent = NFC_EVENT_ACTIVE;
-        //            break;
-        //        }
         if(ret & MAIN_IRQ_ACTIVE){
             nfc->curEvent = NFC_EVENT_ACTIVE;
             break;
@@ -107,86 +135,90 @@ void NFC_IdleHandle(stNFCobj *nfc)
     }
 }
 
-static void selectProtocl(stNFCobj *nfc, stESLRecBuf *rbuf)
+static uint16_t selectProtoclHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
 {
-    uint16_t tmp = 0;
-    int16_t  len = 0;
-//    uint8_t debug = 0;
-
-    nfc->nextEvent = NFC_EVENT_NONE;
-    nfc->error = NFC_ERR_NONE;
-    bsp_spi_tm = BSP_SPI_NORMAL;
-    set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
-    do{
-        len = FM11_rx(nfc, rbuf);
-        if (nfc->error != NFC_ERR_NONE){
-            nfc->nextEvent = NFC_EVENT_TIMEOUT;
-            break;
-        }
-        if (len == 0){
-            nfc->curEvent = NFC_EVENT_REC_ERR;
-            continue;
-        }
-
-        switch(rbuf->dataRec.pcb){
-            case PCB_IBLOCK0:           //pcb异常处理todo
-            case PCB_IBLOCK1:
-                tmp = (uint16_t)rbuf->tagSelect.ins<<8 | rbuf->tagSelect.p1;
-                if (TAG_STANDARD==tmp  && nfcProtoclFlg==NFC_PRIVATE_PROTOCL){
-                    memcpy(&rbuf->dataRec.session, responseErr, sizeof(responseErr));        //回错误，走私有协议
-                    len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                }else if (TAG_STANDARD==tmp  && nfcProtoclFlg==NFC_NDEF_FILE){
-                    memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));        //走标准协议
-                    len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
-                }else if (EM_READ_ESL_ID == rbuf->dataRec.reqType){
-                    memcpy(&rbuf->dataRec.data, (uint8_t*)&INFO_DATA.gRFInitData, sizeof(stRFInfo));
-                    rbuf->buf[28] = 0x90;
-                    rbuf->buf[29] = 0x00;
-                    rbuf->dataRec.len = 21;
-                    len = 30;
-                    nfc->nextEvent = NFC_EVENT_PRIVATE_PROTOCL;
-                }else {
-                    memcpy(&rbuf->dataRec.session , responseErr, sizeof(responseErr));
-                    len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                }
-                break;
-            case PCB_RBLOCK0:
-            case PCB_RBLOCK1:
-                memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
-                len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                break;
-            default:
-                memcpy(&rbuf->dataRec.session , responseErr, sizeof(responseErr));
-                len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                break;
-
-        }
-
-        FM11_tx(nfc, rbuf, len);
-        if (nfc->error != NFC_ERR_NONE){
-            nfc->nextEvent = NFC_EVENT_TIMEOUT;
-            break;
+    uint16_t len;
+    uint16_t offset;
+    uint8_t *p = (uint8_t*)responseErr;
+    if (nfcProtoclFlg==NFC_PRIVATE_PROTOCL){
+        if (rbuf->cmdAPDU.ins==INS_DETECTION && CLA_STANDARD==rbuf->cmdAPDU.cla){
+            len = 0;        //回错误，走私有协议
+        }else if (EM_READ_ESL_ID == rbuf->dataRec.reqType){
+            memcpy(&rbuf->dataRec.data, (uint8_t*)&INFO_DATA.gRFInitData, sizeof(stRFInfo));
+            rbuf->dataRec.len = 21;
+            len = 27;
+            p = (uint8_t*)responseOk;
+            nfc->nextEvent = NFC_EVENT_PRIVATE_PROTOCL;
         }else{
-            set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
+            len = 0;
         }
-        nfc->preEvent = nfc->curEvent;
-    }while(nfc->nextEvent != NFC_EVENT_PRIVATE_PROTOCL);
-    stop_nfc_timer();
-    nfc->curEvent = nfc->nextEvent;
+    }else {     //走标准协议
+        if (INS_DETECTION==rbuf->cmdAPDU.ins && CLA_STANDARD==rbuf->cmdAPDU.cla){
+            p = (uint8_t*)responseOk;        //step 1,2,4
+            len = 0;
+        }else if(INS_READ==rbuf->cmdAPDURead.ins && CLA_STANDARD==rbuf->cmdAPDURead.cla){ //step 3,5
+            offset = ((uint16_t)rbuf->cmdAPDURead.p1<<8)|rbuf->cmdAPDURead.p2;
+            len = rbuf->cmdAPDURead.le;
+            if (2==len){            //read NDEF
+                nfc->nextEvent = NFC_EVENT_STANDARD_PROTOCL;
+                memcpy(&rbuf->buf[1], ndefTest+offset, len);
+            }else{                  //read CC File
+                memcpy(&rbuf->buf[1], (uint8_t*)&type_4_tag+offset, len);
+            }
+            p = (uint8_t*)responseOk;
+        }else{
+            len = 0;
+        }
+    }
+    memcpy(&rbuf->buf[1]+len, p, sizeof(responseOk));
+    len = sizeof(rbuf->dataRec.pcb) + len + sizeof(responseOk);
+    return len;
 }
 
-
-uint16_t rx_dataHandle(stNFCobj *nfc, stESLRecBuf *rbuf)
+static uint16_t standardHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
 {
-    int16_t  len = 0;
+    uint8_t len;
+    uint16_t offset;
+    uint8_t *p=(uint8_t*)responseErr;
+    uint16_t tmp = ((uint16_t)rbuf->cmdAPDURead.cla<<8)|rbuf->cmdAPDU.ins;
+    offset = ((uint16_t)rbuf->cmdAPDURead.p1<<8)|rbuf->cmdAPDURead.p2;
+
+    switch(tmp){
+        case STANDARD_READ:
+            len = rbuf->cmdAPDURead.le;
+            memcpy(&rbuf->buf[1], ndefTest+offset, len);
+            p=(uint8_t*)responseOk;
+            break;
+        case STANDARD_WRITE:
+            len = rbuf->cmdAPDU.lc;
+            memcpy(ndefTest+offset, &rbuf->buf[sizeof(stCmdAPDU)], len);
+            len = 0;
+            p=(uint8_t*)responseOk;
+            break;
+        case STANDARD_SELECT:
+            nfc->nextEvent = NFC_EVENT_DETECT_CARD;
+            p=(uint8_t*)responseOk;
+            //no break
+        default:
+            len = 0;
+            break;
+    }
+
+    memcpy(&rbuf->buf[1]+len, p, sizeof(responseOk));
+    len = sizeof(rbuf->dataRec.pcb) + len + sizeof(responseOk);
+    return len;
+}
+
+static uint16_t privateRxDataHandle(stNFCobj *nfc, stESLRecBuf *rbuf)
+{
+    int8_t  len = 0;
     switch(rbuf->dataRec.reqType){
         case EM_LIGHT_CFG_CMD:
-            nfc->nextEvent = NFC_EVENT_NONE;
-            if (rbuf->cnotentCtrLED.display_time!=0 &&
-                gSys_tp.page_map[rbuf->cnotentCtrLED.page_num] != rbuf->cnotentCtrLED.page_num){
-                    memcpy(&rbuf->dataRec.session, responsePageErr, sizeof(responsePageErr));
-                    len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                    break;
+            nfc->nextEvent = NFC_EVENT_LIGHT_LED;
+            if (rbuf->cmdAPDU.ins==INS_DETECTION && CLA_STANDARD==rbuf->cmdAPDU.cla){
+                memcpy(&rbuf->dataRec.session, responsePageErr, sizeof(responsePageErr));
+                len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
+                break;
             }
             memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
             len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
@@ -200,7 +232,7 @@ uint16_t rx_dataHandle(stNFCobj *nfc, stESLRecBuf *rbuf)
             creat_uplink_request_pkg(rbuf->dataRec.reqType, rbuf->dataRec.data.cnotentData);
             uplink_request_and_rx_ack();
 
-            nfc->nextEvent = NFC_EVENT_NONE;
+            nfc->nextEvent = NFC_EVENT_BLINDING;
             break;
         case EM_UPDATE_STR_FORMAT:
         case EM_UPDATE_INT_FORMAT:
@@ -211,7 +243,7 @@ uint16_t rx_dataHandle(stNFCobj *nfc, stESLRecBuf *rbuf)
             creat_uplink_request_pkg(rbuf->dataRec.reqType, rbuf->dataRec.data.cnotentData);
             uplink_request_and_rx_ack();
 
-           nfc->nextEvent = NFC_EVENT_NONE;
+           nfc->nextEvent = NFC_EVENT_UPDATA;
            break;
         case EM_READ_ESL_ID:
             memcpy(&rbuf->dataRec.data, (uint8_t*)&INFO_DATA.gRFInitData, sizeof(stRFInfo));
@@ -233,7 +265,7 @@ uint16_t rx_dataHandle(stNFCobj *nfc, stESLRecBuf *rbuf)
     return len;
 }
 
-uint16_t dataErrHandle( stESLRecBuf *rbuf)
+static uint16_t dataErrHandle( stESLRecBuf *rbuf)
 {
     int16_t  len = 0;
     uint16_t tmp = 0;
@@ -263,80 +295,26 @@ uint16_t dataErrHandle( stESLRecBuf *rbuf)
     }
     return len;
 }
-static void privateProtoclFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
-{
-    uint32_t len = 0;
-    uint16_t tmp = 0;
-    nfc->nextEvent = NFC_EVENT_HANDLE;
-    nfc->error = NFC_ERR_NONE;
-    bsp_spi_tm = BSP_SPI_NORMAL;
-    set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
-    do{
-        len = FM11_rx(nfc, rbuf);
-        if (nfc->error != NFC_ERR_NONE){
-            nfc->nextEvent = NFC_EVENT_TIMEOUT;
-            break;
-        }
-        if (len == 0){
-            nfc->curEvent = NFC_EVENT_REC_ERR;
-            continue;
-        }
 
-        switch(rbuf->dataRec.pcb){
-        case PCB_IBLOCK0:
-        case PCB_IBLOCK1:
-            tmp = (uint16_t)rbuf->tagSelect.ins<<8 | rbuf->tagSelect.p1;
-            if (TAG_STANDARD==tmp  && nfcProtoclFlg==NFC_PRIVATE_PROTOCL){
-                memcpy(&rbuf->dataRec.session, responseErr, sizeof(responseErr));        //回错误，走私有协议
-                len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-                nfc->nextEvent = NFC_EVENT_DETECT_CARD;
-            }else{
-                tmp = ack_crc_fun(rbuf->buf+PCB_OFFSET, rbuf->dataRec.len + NFC_HEAD_LEN + CRC_LEN);//加CRC长度是因为函数里已经减去
-                if (tmp == ((uint16_t)rbuf->buf [CRC_HIGH]<<8) | rbuf->buf [CRC_LOW]){
-                    len = rx_dataHandle(nfc, rbuf);
-                }else{
-                    len = dataErrHandle(rbuf);
-                }
-            }
-            break;
-        case PCB_IBLOCK0_CHAINING:
-        case PCB_IBLOCK1_CHAINING:
-            break;
-        case PCB_RBLOCK0:
-        case PCB_RBLOCK1:
-            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
-            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
-            //nfc->curEvent = NFC_EVENT_LINK_CMD;
-            break;
-        case PCB_SBLOCK_DSELECT:
-            //nfc->curEvent = NFC_EVENT_LINK_CMD;
-            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
-            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
-            nfc->nextEvent = NFC_EVENT_NONE;
-            break;
-        case PCB_SBLOCK_WTX:
-            break;
-        default:
-            memcpy(&rbuf->dataRec.session , responseErr, sizeof(responseErr));
-            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
-            break;
-        }
-        FM11_tx(nfc, rbuf, len);
-        if (nfc->error != NFC_ERR_NONE){
-            nfc->nextEvent = NFC_EVENT_TIMEOUT;
-            break;
+static uint16_t privateHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
+{
+    uint16_t tmp;
+    uint16_t len;
+    if (rbuf->cmdAPDU.ins==INS_DETECTION && CLA_STANDARD==rbuf->cmdAPDU.cla){
+        memcpy(&rbuf->dataRec.session, responseErr, sizeof(responseErr));        //回错误，走私有协议
+        len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
+        nfc->nextEvent = NFC_EVENT_DETECT_CARD;
+    }else{
+        tmp = ack_crc_fun(rbuf->buf+PCB_OFFSET, rbuf->dataRec.len + NFC_HEAD_LEN + CRC_LEN);//加CRC_LEN是因为ack_crc_fun里已经减去CRC长度
+        if (tmp == ((uint16_t)rbuf->buf [CRC_HIGH]<<8) | rbuf->buf [CRC_LOW]){
+            len = privateRxDataHandle(nfc, rbuf);
         }else{
-            set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
+            len = dataErrHandle(rbuf);
         }
-        nfc->preEvent = nfc->curEvent;
-    }while(nfc->nextEvent != NFC_EVENT_NONE);
-    stop_nfc_timer();
-    nfc->curEvent = nfc->nextEvent;
+    }
+    return len;
 }
-static void standardProtoclFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
-{
 
-}
 void NFC_ProtoclFnx(stNFCobj *nfc)
 {
 
@@ -359,7 +337,8 @@ void NFC_ProtoclFnx(stNFCobj *nfc)
             }
             break;
         case NFC_DETECT_PROTOCL_STATE:
-            selectProtocl(nfc, &fm11nc08_buf);
+            nfcFxnTable[0] = selectProtoclHandleFnx;
+            commonFnx(nfc, &fm11nc08_buf);
             if (nfc->curEvent == NFC_EVENT_PRIVATE_PROTOCL) {
                 nfc->nextState = NFC_PRIVATE_PROTOCL_HANDLE;
             } else if(nfc->curEvent == NFC_EVENT_STANDARD_PROTOCL){
@@ -369,16 +348,20 @@ void NFC_ProtoclFnx(stNFCobj *nfc)
             }
             break;
         case NFC_STANDARD_PROTOCL_HANDLE:
-            standardProtoclFnx(nfc, &fm11nc08_buf);
-            if (nfc->curEvent == NFC_EVENT_NONE ){
+            nfcFxnTable[0] = standardHandleFnx;
+            commonFnx(nfc, &fm11nc08_buf);
+            if (nfc->curEvent & NFC_EVENT_STANDARD_ALL){
                 nfc->nextState = NFC_EVENT_FINISH_STATE;
+            }else if(nfc->curEvent == NFC_EVENT_DETECT_CARD){
+                nfc->nextState = NFC_DETECT_PROTOCL_STATE;
             }else{
                 nfc->nextState = NFC_ERR_STATE;
             }
             break;
         case NFC_PRIVATE_PROTOCL_HANDLE:
-            privateProtoclFnx(nfc, &fm11nc08_buf);
-            if (nfc->curEvent == NFC_EVENT_NONE ){
+            nfcFxnTable[0] = privateHandleFnx;
+            commonFnx(nfc, &fm11nc08_buf);
+            if (nfc->curEvent & NFC_EVENT_PRIVATE_ALL){
                 nfc->nextState = NFC_EVENT_FINISH_STATE;
             }else if(nfc->curEvent == NFC_EVENT_DETECT_CARD){
                 nfc->nextState = NFC_DETECT_PROTOCL_STATE;
@@ -419,6 +402,55 @@ void NFC_ProtoclFnx(stNFCobj *nfc)
 }
 
 
+static void commonFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
+{
+    uint8_t len = 0;
+    nfc->nextEvent = NFC_EVENT_NONE;
+    nfc->error = NFC_ERR_NONE;
+    bsp_spi_tm = BSP_SPI_NORMAL;
+
+    do{
+        set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
+        len = FM11_rx(nfc, rbuf);
+        if (nfc->error != NFC_ERR_NONE){
+            nfc->nextEvent = NFC_EVENT_TIMEOUT;
+            break;
+        }
+
+        switch(rbuf->dataRec.pcb){
+        case PCB_IBLOCK0:
+        case PCB_IBLOCK1:
+            len = nfcFxnTable[0](nfc, rbuf);
+            break;
+        case PCB_IBLOCK0_CHAINING:
+        case PCB_IBLOCK1_CHAINING:
+            break;
+        case PCB_RBLOCK0:
+        case PCB_RBLOCK1:
+            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
+            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
+            break;
+        case PCB_SBLOCK_DSELECT:
+            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
+            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
+            nfc->nextEvent = NFC_EVENT_DETECT_CARD;
+            break;
+        case PCB_SBLOCK_WTX:
+            break;
+        default:
+            memcpy(&rbuf->dataRec.session , responseErr, sizeof(responseErr));
+            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
+            break;
+        }
+        FM11_tx(nfc, rbuf, len);
+        if (nfc->error != NFC_ERR_NONE){
+            nfc->nextEvent = NFC_EVENT_TIMEOUT;
+        }
+        nfc->preEvent = nfc->curEvent;
+    }while(nfc->nextEvent == NFC_EVENT_NONE);
+    stop_nfc_timer();
+    nfc->curEvent = nfc->nextEvent;
+}
 static void NFC_state(stNFCobj *nfc, stESLRecBuf *rbuf)
 {
 

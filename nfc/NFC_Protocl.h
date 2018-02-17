@@ -88,14 +88,22 @@ typedef struct _stESLReceive{
 //    uint16_t fm11nc08_crc;
 }stESLReceive;
 
-typedef struct _stTagSelect{
+typedef struct _stCmdAPDU{
     uint8_t pcb;
     uint8_t cla;
     uint8_t ins;
     uint8_t p1;
     uint8_t p2;
     uint8_t lc;
-}stTagSelect;
+}stCmdAPDU;
+typedef struct _stCmdAPDURead{
+    uint8_t pcb;
+    uint8_t cla;
+    uint8_t ins;
+    uint8_t p1;
+    uint8_t p2;
+    uint8_t le;
+}stCmdAPDURead;
 
 //-------------SEND----------
 typedef struct _stRFInfo
@@ -144,7 +152,8 @@ typedef struct _stESLSend{
 typedef union _stESLRecBuf{
     stESLReceive    dataRec;
     uint8_t                 buf[FIFO_BUF_LEN];
-    stTagSelect         tagSelect;
+    stCmdAPDURead  cmdAPDURead;
+    stCmdAPDU         cmdAPDU;
     stReaderCtrLED      cnotentCtrLED;
     stESLSend          dataSend;
 }stESLRecBuf;
@@ -183,30 +192,26 @@ typedef enum _emNFC_State{
 }emNFC_State;
 
 typedef enum _emNFC_Event{
-    NFC_EVENT_NONE,
-    NFC_EVENT_IRQ,
-    NFC_EVENT_HANDLE,
-    NFC_EVENT_IRQ_FINISH,
-    NFC_EVENT_DETECT_CARD,
-    NFC_EVENT_STANDARD_PROTOCL,
-    NFC_EVENT_PRIVATE_PROTOCL,
-    NFC_EVENT_REC_CHAINING,
-    NFC_EVENT_REC_FIFO_WL,          //Water Level
-    NFC_EVENT_REC_DONE,
-    NFC_EVENT_REC_ERR,
-    NFC_EVENT_SEND_DONE,
-    NFC_EVENT_ACTIVE,
-    NFC_EVENT_LIGHT_LED,
-    NFC_EVENT_BLINDING,
-    NFC_EVENT_WRITE_DATA,
-    NFC_EVENT_READ_ID,
-    NFC_EVENT_REMOVE,
-    NFC_EVENT_APPROACH,
-    NFC_EVENT_TIMEOUT,
-    NFC_EVENT_LINK_CMD,
-
-
-    NFC_EVENT_COUNT
+    NFC_EVENT_NONE = 0,
+    NFC_EVENT_DETECT_CARD = (1<<0),
+    NFC_EVENT_STANDARD_PROTOCL = (1<<1),
+    NFC_EVENT_PRIVATE_PROTOCL = (1<<2),
+    NFC_EVENT_REC_CHAINING = (1<<3),
+    NFC_EVENT_REC_FIFO_WL = (1<<4),          //Water Level
+    NFC_EVENT_REC_DONE = (1<<5),
+    NFC_EVENT_REC_ERR = (1<<6),
+    NFC_EVENT_SEND_DONE = (1<<7),
+    NFC_EVENT_ACTIVE = (1<<8),
+    NFC_EVENT_LIGHT_LED = (1<<9),
+    NFC_EVENT_BLINDING = (1<<10),
+    NFC_EVENT_UPDATA = (1<<11),
+    NFC_EVENT_WRITE_DATA = (1<<12),
+    NFC_EVENT_READ_ID = (1<<13),
+    NFC_EVENT_REMOVE = (1<<14),
+    NFC_EVENT_APPROACH = (1<<15),
+    NFC_EVENT_TIMEOUT = (1<<16),
+    NFC_EVENT_STANDARD_READ = (1<<17),
+    NFC_EVENT_STANDARD_WRITE = (1<<18),
 }emNFC_Event;
 
 typedef enum    _emErr{

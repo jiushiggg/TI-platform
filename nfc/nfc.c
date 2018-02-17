@@ -1,5 +1,4 @@
 #include "../nfc/nfc.h"
-#include "nfc.h"
 #include "Board.h"
 #include "../nfc/NFC_Protocl.h"
 #include <ti/sysbios/knl/Clock.h>

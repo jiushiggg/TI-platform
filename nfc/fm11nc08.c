@@ -405,16 +405,15 @@ uint32_t FM11_rx(stNFCobj *nfc, stESLRecBuf *rbuf)
         tmp = FM11_Serial_ReadReg(MAIN_IRQ);
 //        debug = FM11_Serial_ReadReg(MAIN_IRQ_MASK);
         if(tmp & MAIN_IRQ_RX_DONE){
+            len_cnt =  FM11_Serial_ReadReg(FIFO_WORDCNT) & 0x3F;
+            if (len_cnt < MIN_LEN){
+                continue;
+            }
             nfc->curEvent = NFC_EVENT_REC_DONE;
             break;
         }
     }
     if (NFC_ERR_NONE != nfc->error){
-        return 0;
-    }
-
-    len_cnt =  FM11_Serial_ReadReg(FIFO_WORDCNT) & 0x3F;
-    if (len_cnt < MIN_LEN){
         return 0;
     }
 
