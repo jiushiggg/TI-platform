@@ -23,8 +23,6 @@
 #define MIN_LEN             3   //PCB+CRC16
 
 void NFC_IRQ_occur(void);
-void FM11_tx(stNFCobj *nfc, stESLRecBuf *sbuf, uint8_t len);
-uint32_t FM11_rx(stNFCobj *nfc, stESLRecBuf *rbuf);
 
 
 void pt_delay_ms(uint32_t delayMs)
@@ -394,7 +392,7 @@ void FM11_Init(uint32_t bitRate, uint32_t clkPin)
 #endif
 }
 
-uint32_t FM11_rx(stNFCobj *nfc, stESLRecBuf *rbuf)
+uint32_t FM11_rx(stNFCobj *nfc, uint8_t *rbuf)
 {
     uint32_t len_cnt=0;
     uint8_t tmp = 0;
@@ -418,16 +416,18 @@ uint32_t FM11_rx(stNFCobj *nfc, stESLRecBuf *rbuf)
     }
 
     if (nfc->curEvent == NFC_EVENT_REC_DONE){    //在这里一直接收，写入RAM。
-        FM11_Serial_Read_FIFO(len_cnt, rbuf->buf);
+        FM11_Serial_Read_FIFO(len_cnt, rbuf);
     }else{
         nfc->error = NFC_ERR_UNKNOW;
     }
     return len_cnt;
 }
-void FM11_tx(stNFCobj *nfc, stESLRecBuf *sbuf, uint8_t len)
+#if 1
+void FM11_tx(stNFCobj *nfc, uint8_t *sbuf, uint8_t len)
 {
     uint8_t tmp = 0;
-    FM11_Serial_Write_FIFO(sbuf->buf,  len);
+
+    FM11_Serial_Write_FIFO(sbuf,  len);
     FM11_Serial_WriteReg(RF_TXEN, 0x55);
     while(NFC_ERR_NONE == nfc->error){
         tmp = FM11_Serial_ReadReg(MAIN_IRQ);
@@ -438,6 +438,37 @@ void FM11_tx(stNFCobj *nfc, stESLRecBuf *sbuf, uint8_t len)
         }
     }
 }
+#else
+void FM11_tx(stNFCobj *nfc, uint8_t *sbuf, uint8_t len)
+{
+    uint8_t tmp = 0;
+    uint8_t len_send = 0;
+    uint8_t cnt = 0;
+    while(len > 0){
+        cnt++;
+        if (len >= FIFO_LEN){
+            len -= FIFO_LEN;
+            len_send = FIFO_LEN;
+        }else{
+            len_send = len;
+            len = 0;
+        }
 
+        FM11_Serial_Write_FIFO(sbuf,  len_send);
+        FM11_Serial_WriteReg(RF_TXEN, 0x55);
+        while(NFC_ERR_NONE == nfc->error){
+            tmp = FM11_Serial_ReadReg(MAIN_IRQ);
+    //                        debug = FM11_Serial_ReadReg(MAIN_IRQ_MASK);
+            if(tmp & MAIN_IRQ_TX_DONE){
+                nfc->curEvent = NFC_EVENT_SEND_DONE;
+                break;
+            }
+        }
+        if (2 == cnt){
+            asm(" NOP");
+        }
+    }
+}
+#endif
 
 

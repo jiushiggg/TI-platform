@@ -12,6 +12,7 @@
 #include "../three_protocol/three_protocol.h"
 
 #define     FIFO_BUF_LEN    250
+#define     FIFO_LEN    32
 #define     REQ_CONTENT_LEN  (26)   //32-6
 #define     ACK_DATA_LEN    20
 

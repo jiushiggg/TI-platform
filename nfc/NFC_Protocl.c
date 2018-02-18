@@ -14,7 +14,6 @@
 
 typedef uint16_t (*nfcFnx)(stNFCobj *nfc, stESLRecBuf *rbuf);
 
-#define FIFO_LEN    32
 
 //ISO 14443-4
 #define PCB_IBLOCK0                              0X02
@@ -25,6 +24,7 @@ typedef uint16_t (*nfcFnx)(stNFCobj *nfc, stESLRecBuf *rbuf);
 #define PCB_RBLOCK1                             0XB3
 #define PCB_SBLOCK_DSELECT          0XC2
 #define PCB_SBLOCK_WTX                     0XF2
+#define PCB_ERR                             0XFF
 
 //Support NFCForum-TS-Type-4-Tag_2.0
 #define PCB     0
@@ -71,6 +71,7 @@ static uint16_t standardHandleFnx(stNFCobj *nfc, stESLRecBuf *rbuf);
 static void NFC_state(stNFCobj *nfc, stESLRecBuf *rbuf);
 static uint16_t privateRxDataHandle(stNFCobj *nfc, stESLRecBuf *rbuf);
 static void NFC_IdleHandle(stNFCobj *nfc);
+static void NFC_memery_offset(void *dst, uint8_t len);
 void testState(void);
 
 uint8_t const responseErr[2] = {0x6A, 0x82};
@@ -405,36 +406,64 @@ void NFC_ProtoclFnx(stNFCobj *nfc)
 static void commonFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
 {
     uint8_t len = 0;
+    uint8_t len_chaning = 0;
+    uint8_t pre_pcb = 0;
+    uint8_t pcb = 0;
+    uint8_t buf_chaning[5];
     nfc->nextEvent = NFC_EVENT_NONE;
     nfc->error = NFC_ERR_NONE;
     bsp_spi_tm = BSP_SPI_NORMAL;
 
+
     do{
         set_nfc_timer(NFC_TIMER_ONCE, NFC_TIMEOUT_50MS);
-        len = FM11_rx(nfc, rbuf);
+        len = FM11_rx(nfc, (uint8_t*)rbuf + len_chaning);
         if (nfc->error != NFC_ERR_NONE){
             nfc->nextEvent = NFC_EVENT_TIMEOUT;
             break;
         }
-
-        switch(rbuf->dataRec.pcb){
+        pcb = *((uint8_t*)rbuf + len_chaning);
+        if (pre_pcb == pcb){      //NFC PCB交替改变
+            pcb = PCB_ERR;
+        }
+        switch(pcb){
         case PCB_IBLOCK0:
         case PCB_IBLOCK1:
+            if (PCB_IBLOCK0_CHAINING==pre_pcb || PCB_IBLOCK0_CHAINING==pre_pcb){
+                NFC_memery_offset((uint8_t*)rbuf + len_chaning, len-1);
+                len_chaning = 0;
+            }
             len = nfcFxnTable[0](nfc, rbuf);
+            rbuf->cmdAPDU.pcb = pcb;
             break;
         case PCB_IBLOCK0_CHAINING:
         case PCB_IBLOCK1_CHAINING:
+            buf_chaning[0] = (rbuf->dataRec.pcb&0x0F) | 0xA0;
+            if (250-len_chaning > len){
+                if (PCB_IBLOCK0 ==pre_pcb || PCB_IBLOCK1 ==pre_pcb){
+                    len_chaning += len-CRC_LEN;                              //去掉CRC长度
+                }else {
+                    NFC_memery_offset((uint8_t*)rbuf+len_chaning, len-CRC_LEN-PCB_LEN);  //去掉 PCB,去掉CRC
+                    len_chaning += len-CRC_LEN-PCB_LEN;
+                }
+
+                memcpy(buf_chaning+1, responseOk, sizeof(responseOk));
+            }else{
+                memcpy(buf_chaning+1 , responseErr, sizeof(responseErr));
+                nfc->nextEvent = NFC_EVENT_REC_ERR;
+            }
+            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
             break;
         case PCB_RBLOCK0:
         case PCB_RBLOCK1:
             memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
             len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
             break;
-        case PCB_SBLOCK_DSELECT:
-            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
-            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
-            nfc->nextEvent = NFC_EVENT_DETECT_CARD;
-            break;
+//        case PCB_SBLOCK_DSELECT:
+//            memcpy(&rbuf->dataRec.session, responseOk, sizeof(responseOk));
+//            len = sizeof(rbuf->dataRec.pcb) + sizeof(responseOk);
+//            nfc->nextEvent = NFC_EVENT_DETECT_CARD;
+//            break;
         case PCB_SBLOCK_WTX:
             break;
         default:
@@ -442,11 +471,18 @@ static void commonFnx(stNFCobj *nfc, stESLRecBuf *rbuf)
             len = sizeof(rbuf->dataRec.pcb) + sizeof(responseErr);
             break;
         }
-        FM11_tx(nfc, rbuf, len);
+
+        if (pcb==PCB_IBLOCK0_CHAINING || pcb==PCB_IBLOCK1_CHAINING){
+            FM11_tx(nfc, buf_chaning, len);
+        }else{
+            FM11_tx(nfc, (uint8_t*)rbuf, len);
+        }
+
         if (nfc->error != NFC_ERR_NONE){
             nfc->nextEvent = NFC_EVENT_TIMEOUT;
         }
         nfc->preEvent = nfc->curEvent;
+        pre_pcb = pcb;
     }while(nfc->nextEvent == NFC_EVENT_NONE);
     stop_nfc_timer();
     nfc->curEvent = nfc->nextEvent;
@@ -473,4 +509,12 @@ static void NFC_state(stNFCobj *nfc, stESLRecBuf *rbuf)
      }
 }
 
+static void NFC_memery_offset(void *dst, uint8_t len)
+{
+    uint8_t i = 0;
+    uint8_t *p=dst;
+    for(i=0; i<len; i++){
+        p[i] = p[i+1];
+    }
 
+}

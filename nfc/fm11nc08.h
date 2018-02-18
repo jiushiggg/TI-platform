@@ -172,7 +172,7 @@ extern void FM11_Serial_Read_FIFO(uint32_t rlen,uint8_t *rbuf);
 extern void FM11_Init(uint32_t bitRate, uint32_t clkPin);
 
 extern void pt_delay_us(uint32_t delayUs);
-void FM11_tx(stNFCobj *nfc, stESLRecBuf *sbuf, uint8_t len);
-uint32_t FM11_rx(stNFCobj *nfc, stESLRecBuf *rbuf);
+extern void FM11_tx(stNFCobj *nfc, uint8_t *sbuf, uint8_t len);
+extern uint32_t FM11_rx(stNFCobj *nfc, uint8_t *rbuf);
 
 #endif /* FM11NC08_H_ */
